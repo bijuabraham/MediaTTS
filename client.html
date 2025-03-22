@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Orpheus TTS Client</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    h1 {
+      color: #333;
+      text-align: center;
+    }
+    .container {
+      background-color: #f9f9f9;
+      border-radius: 8px;
+      padding: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: bold;
+    }
+    select, textarea {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 15px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+    button {
+      background-color: #4CAF50;
+      color: white;
+      padding: 10px 15px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    button:hover {
+      background-color: #45a049;
+    }
+    .status {
+      margin-top: 15px;
+      padding: 10px;
+      border-radius: 4px;
+      display: none;
+    }
+    .loading {
+      background-color: #fff3cd;
+      color: #856404;
+    }
+    .error {
+      background-color: #f8d7da;
+      color: #721c24;
+    }
+    .success {
+      background-color: #d4edda;
+      color: #155724;
+    }
+    audio {
+      width: 100%;
+      margin-top: 15px;
+    }
+    .download-btn {
+      text-decoration: none;
+      display: block;
+    }
+    .download-btn button {
+      width: 100%;
+      background-color: #007bff;
+      margin-top: 10px;
+    }
+    .download-btn button:hover {
+      background-color: #0056b3;
+    }
+  </style>
+</head>
+<body>
+  <h1>Orpheus TTS Client</h1>
+  <div class="container">
+    <form id="promptForm">
+      <label for="voiceSelect">Select Voice:</label>
+      <select id="voiceSelect">
+        <option value="tara">Tara (Default)</option>
+        <option value="leah">Leah</option>
+        <option value="jess">Jess</option>
+        <option value="leo">Leo</option>
+        <option value="dan">Dan</option>
+        <option value="mia">Mia</option>
+        <option value="zac">Zac</option>
+        <option value="zoe">Zoe</option>
+      </select>
+      
+      <label for="promptInput">Enter Text:</label>
+      <textarea id="promptInput" rows="4" placeholder="Type your text here..." required></textarea>
+      
+      <button type="submit" id="submitBtn">Generate Speech</button>
+    </form>
+    
+    <div id="loadingStatus" class="status loading">Generating speech, please wait...</div>
+    <div id="errorStatus" class="status error"></div>
+    <div id="successStatus" class="status success">Speech generated successfully!</div>
+    
+    <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 15px;">
+      <audio id="audioPlayer" controls></audio>
+      
+      <div id="downloadContainer" style="display: none;">
+        <a id="downloadLink" href="#" class="download-btn" download="orpheus_speech.wav">
+          <button>
+            <span style="margin-right: 5px;">⬇️</span> Download WAV File
+          </button>
+        </a>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    // Try different ports if the server is not responding on the first one
+    const ports = [5001, 5002, 5003, 5004, 5005];
+    let base_url = `http://localhost:${ports[0]}`;
+    const form = document.getElementById("promptForm");
+    const submitBtn = document.getElementById("submitBtn");
+    const loadingStatus = document.getElementById("loadingStatus");
+    const errorStatus = document.getElementById("errorStatus");
+    const audioPlayer = document.getElementById("audioPlayer");
+    const downloadLink = document.getElementById("downloadLink");
+    const downloadContainer = document.getElementById("downloadContainer");
+    
+    // Check server status on page load
+    window.addEventListener('DOMContentLoaded', findServerAndCheckStatus);
+    
+    // Try to find the server on different ports
+    async function findServerAndCheckStatus() {
+      for (let i = 0; i < ports.length; i++) {
+        const port = ports[i];
+        const url = `http://localhost:${port}`;
+        
+        try {
+          const response = await fetch(`${url}/status`, { timeout: 1000 });
+          if (response.ok) {
+            // Found the server, update base_url
+            base_url = url;
+            console.log(`Found server at ${base_url}`);
+            
+            // Check server status
+            const data = await response.json();
+            console.log("Server status:", data);
+            
+            if (!data.lm_studio) {
+              showError("LM Studio is not running. Please start LM Studio and load the Orpheus model.");
+            } else if (data.orpheus_import_error) {
+              showError(`Error importing Orpheus module: ${data.orpheus_import_error}`);
+            }
+            
+            return; // Exit the loop if we found the server
+          }
+        } catch (err) {
+          console.log(`Server not found on port ${port}, trying next port...`);
+        }
+      }
+      
+      // If we get here, we couldn't find the server on any port
+      showError("Cannot connect to the TTS server. Please make sure the server is running.");
+    }
+    
+    form.addEventListener("submit", function(event) {
+      event.preventDefault();
+      
+      // Get form values
+      const prompt = document.getElementById("promptInput").value;
+      const voice = document.getElementById("voiceSelect").value;
+      
+      if (!prompt.trim()) {
+        showError("Please enter some text to convert to speech.");
+        return;
+      }
+      
+      // Show loading status
+      showLoading();
+      
+      // Hide download button
+      downloadContainer.style.display = "none";
+      
+      // Encode parameters
+      const encodedPrompt = encodeURIComponent(prompt);
+      const audioUrl = `${base_url}/tts?prompt=${encodedPrompt}&voice=${voice}`;
+      
+      // Use fetch to check for error responses before setting audio source
+      fetch(audioUrl)
+        .then(response => {
+          if (!response.ok) {
+            return response.text().then(text => {
+              throw new Error(text || `Server returned ${response.status}: ${response.statusText}`);
+            });
+          }
+          
+          // If response is OK, set the audio source
+          const contentType = response.headers.get('content-type');
+          if (contentType && contentType.includes('audio')) {
+            // It's audio data, use it
+            return response.blob();
+          } else {
+            // It's an error message
+            return response.text().then(text => {
+              throw new Error(text || "Unknown error occurred");
+            });
+          }
+        })
+        .then(blob => {
+          console.log("Audio blob received, size:", blob.size);
+          
+          // Create object URL from blob
+          const url = URL.createObjectURL(blob);
+          console.log("Created object URL:", url);
+          
+          // Reset the audio player
+          audioPlayer.pause();
+          audioPlayer.currentTime = 0;
+          
+          // Set the new source
+          audioPlayer.src = url;
+          
+          // Set download link
+          downloadLink.href = url;
+          downloadLink.download = `orpheus_${voice}_${new Date().toISOString().slice(0,19).replace(/:/g,'-')}.wav`;
+          
+          // Force load the audio
+          audioPlayer.load();
+          
+          console.log("Audio player source set and loaded");
+          
+          // Handle successful audio loading
+          audioPlayer.oncanplay = function() {
+            console.log("Audio can play event fired");
+            hideLoading();
+            // Play the audio
+            audioPlayer.play().then(() => {
+              console.log("Audio playback started");
+            }).catch(err => {
+              console.error("Playback error:", err);
+              showError("Error playing audio. Please try again.");
+            });
+          };
+          
+          // Also hide loading when the audio has loaded metadata
+          audioPlayer.onloadedmetadata = function() {
+            console.log("Audio metadata loaded event fired");
+            hideLoading();
+          };
+          
+          // Also hide loading when the audio has loaded
+          audioPlayer.onloadeddata = function() {
+            console.log("Audio data loaded event fired");
+            hideLoading();
+          };
+          
+          // Set a timeout to hide the loading indicator if it takes too long
+          setTimeout(() => {
+            if (loadingStatus.style.display === "block") {
+              console.log("Loading timeout reached, hiding loading indicator");
+              hideLoading();
+            }
+          }, 5000);
+        })
+        .catch(err => {
+          hideLoading();
+          console.error("Error fetching audio:", err);
+          showError(err.message || "Failed to generate speech. Please check if LM Studio is running.");
+        });
+    });
+    
+    function showLoading() {
+      submitBtn.disabled = true;
+      loadingStatus.style.display = "block";
+      errorStatus.style.display = "none";
+      successStatus.style.display = "none";
+    }
+    
+    function hideLoading() {
+      submitBtn.disabled = false;
+      loadingStatus.style.display = "none";
+      // Show success message
+      document.getElementById("successStatus").style.display = "block";
+      // Show download button
+      downloadContainer.style.display = "block";
+      // Hide success message after 3 seconds
+      setTimeout(() => {
+        document.getElementById("successStatus").style.display = "none";
+      }, 3000);
+    }
+    
+    function showError(message) {
+      errorStatus.textContent = message;
+      errorStatus.style.display = "block";
+      // Hide success message if showing an error
+      document.getElementById("successStatus").style.display = "none";
+      // Hide download button if showing an error
+      downloadContainer.style.display = "none";
+    }
+  </script>
+</body>
+</html>
