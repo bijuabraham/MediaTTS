@@ -1,4 +1,4 @@
-# Orpheus-TTS-Local
+# Orpheus-TTS
 
 A lightweight client for running [Orpheus TTS](https://huggingface.co/canopylabs/orpheus-3b-0.1-ft) locally using LM Studio API.
 
